@@ -182,19 +182,129 @@ RIVEN.graph = () => {
   const GRID_SIZE = 20
   const PORT_TYPES = { default: 0, input: 1, output: 2, request: 3, answer: 4, entry: 5, exit: 6 }
 
-  this.el = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-  this.el.id = 'riven'
-  document.body.appendChild(this.el)
+  // ── Interaction State ──
 
-  const _routes = Object.keys(network).reduce((acc, val, id) => {
-    return `${acc}${drawRoutes(network[val])}`
-  }, '')
+  const selected = new Set()
+  const userGroups = []
+  let groupCounter = 0
+  let mode = 'idle'
+  let dragInfo = null
+  let selectInfo = null
+  let panInfo = null
+  const viewOffset = { x: 0, y: 0 }
+  let renderQueued = false
 
-  const _nodes = Object.keys(network).reduce((acc, val, id) => {
-    return `${acc}${drawNode(network[val])}`
-  }, '')
+  const GROUP_HUES = [190, 260, 330, 50, 120]
 
-  this.el.innerHTML = `<g id='viewport'><g id='routes'>${_routes}</g><g id='nodes'>${_nodes}</g></g>`
+  // ── SVG Setup ──
+
+  const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  el.id = 'riven'
+  document.body.appendChild(el)
+
+  // ── Coordinate Helpers ──
+
+  function screenToViewport (cx, cy) {
+    const r = el.getBoundingClientRect()
+    return { x: cx - r.left - viewOffset.x, y: cy - r.top - viewOffset.y }
+  }
+
+  // ── Soft Snap ──
+
+  function softSnap (value, threshold) {
+    const rounded = Math.round(value)
+    return Math.abs(value - rounded) < threshold ? rounded : value
+  }
+
+  // ── Hit Testing ──
+
+  function nodeAtPoint (vx, vy) {
+    for (const id in network) {
+      const node = network[id]
+      const r = getRect(node)
+      if (vx >= r.x && vx <= r.x + r.w && vy >= r.y - GRID_SIZE / 2 && vy <= r.y + r.h) {
+        return node
+      }
+    }
+    return null
+  }
+
+  function nodesInRect (x1, y1, x2, y2) {
+    const lo = { x: Math.min(x1, x2), y: Math.min(y1, y2) }
+    const hi = { x: Math.max(x1, x2), y: Math.max(y1, y2) }
+    const hits = []
+    for (const id in network) {
+      const node = network[id]
+      const r = getRect(node)
+      const cx = r.x + r.w / 2
+      const cy = r.y + r.h / 2
+      if (cx >= lo.x && cx <= hi.x && cy >= lo.y && cy <= hi.y) {
+        hits.push(node)
+      }
+    }
+    return hits
+  }
+
+  // ── Render ──
+
+  function queueRender () {
+    if (!renderQueued) {
+      renderQueued = true
+      requestAnimationFrame(() => { renderQueued = false; render() })
+    }
+  }
+
+  function render () {
+    const _groups = userGroups.map(g => drawUserGroup(g)).join('')
+
+    const _routes = Object.keys(network).reduce((acc, val) => {
+      return `${acc}${drawRoutes(network[val])}`
+    }, '')
+
+    const _nodes = Object.keys(network).reduce((acc, val) => {
+      return `${acc}${drawNode(network[val])}`
+    }, '')
+
+    let _selectRect = ''
+    if (mode === 'selecting' && selectInfo) {
+      const sx = Math.min(selectInfo.sx, selectInfo.cx)
+      const sy = Math.min(selectInfo.sy, selectInfo.cy)
+      const sw = Math.abs(selectInfo.cx - selectInfo.sx)
+      const sh = Math.abs(selectInfo.cy - selectInfo.sy)
+      _selectRect = `<rect class='selection-rect' x='${sx}' y='${sy}' width='${sw}' height='${sh}'/>`
+    }
+
+    el.innerHTML = `<g id='viewport' style='transform:translate(${parseInt(viewOffset.x)}px,${parseInt(viewOffset.y)}px)'><g id='user-groups'>${_groups}</g><g id='routes'>${_routes}</g><g id='nodes'>${_nodes}</g>${_selectRect}</g>`
+  }
+
+  function updatePan () {
+    const vp = document.getElementById('viewport')
+    if (vp) { vp.style.transform = `translate(${parseInt(viewOffset.x)}px,${parseInt(viewOffset.y)}px)` }
+    document.body.style.backgroundPosition = `${parseInt(viewOffset.x * 0.75)}px ${parseInt(viewOffset.y * 0.75)}px`
+  }
+
+  // ── Group Drawing ──
+
+  function drawUserGroup (group) {
+    let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity
+    let count = 0
+    for (const nid of group.nodeIds) {
+      const n = network[nid]
+      if (!n) continue
+      count++
+      const r = getRect(n)
+      minX = Math.min(minX, r.x)
+      minY = Math.min(minY, r.y - GRID_SIZE / 2)
+      maxX = Math.max(maxX, r.x + r.w)
+      maxY = Math.max(maxY, r.y + r.h + GRID_SIZE)
+    }
+    if (!count) return ''
+    const pad = GRID_SIZE * 0.8
+    const h = group.hue
+    return `<rect class='group-bg' x='${minX - pad}' y='${minY - pad}' width='${maxX - minX + pad * 2}' height='${maxY - minY + pad * 2}' rx='${GRID_SIZE * 0.4}' ry='${GRID_SIZE * 0.4}' style='fill:hsla(${h},25%,45%,0.07);stroke:hsla(${h},25%,55%,0.14);stroke-width:1'/>`
+  }
+
+  // ── Node & Route Drawing ──
 
   function drawRoutes (node) {
     let html = ''
@@ -211,8 +321,9 @@ RIVEN.graph = () => {
 
   function drawNode (node) {
     const rect = getRect(node)
+    const sel = selected.has(node.id) ? ' selected' : ''
     return `
-    <g class='node ${node.name}' id='node_${node.id}'>
+    <g class='node ${node.name}${sel}' id='node_${node.id}'>
       <rect rx='2' ry='2' x=${rect.x} y=${rect.y - (GRID_SIZE / 2)} width="${rect.w}" height="${rect.h}" class='${node.children.length === 0 ? 'fill' : ''}'/>
       <text x="${rect.x + (rect.w / 2) + (GRID_SIZE * 0.3)}" y="${rect.y + rect.h + (GRID_SIZE * 0.2)}">${node.label}</text>
       ${drawPorts(node)}
@@ -221,7 +332,7 @@ RIVEN.graph = () => {
   }
 
   function drawPorts (node) {
-    return Object.keys(node.ports).reduce((acc, val, id) => {
+    return Object.keys(node.ports).reduce((acc, val) => {
       return `${acc}${drawPort(node.ports[val])}`
     }, '')
   }
@@ -236,6 +347,8 @@ RIVEN.graph = () => {
     const r = GRID_SIZE / 6
     return `<g class='port ${port.id}' id='${port.host.id}_port_${port.id}'><path d='M${pos.x - (r)},${pos.y} L${pos.x},${pos.y - (r)} L${pos.x + (r)},${pos.y} L${pos.x},${pos.y + (r)} Z'/></g>`
   }
+
+  // ── Connection Drawing ──
 
   function drawConnection (a, b) {
     if (isBidirectional(a.host, b.host)) {
@@ -331,6 +444,8 @@ RIVEN.graph = () => {
     return `<path d="${path}" class='route bidirectional'/>`
   }
 
+  // ── Geometry Helpers ──
+
   function getPortPosition (port) {
     const rect = getRect(port.host)
     let offset = { x: 0, y: 0 }
@@ -358,55 +473,149 @@ RIVEN.graph = () => {
       x += offset.x
       y += offset.y
     }
-    return { x: x + (2 * GRID_SIZE), y: y + (2 * GRID_SIZE), w: w, h: h }
+    return { x: x + (2 * GRID_SIZE), y: y + (2 * GRID_SIZE), w, h }
   }
 
   function middle (a, b) {
     return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
   }
 
-  // Cursor
+  // ── Event Handlers ──
 
-  this.cursor = {
-    host: null,
-    el: document.createElement('cursor'),
-    target: null,
-    pos: { x: 0, y: 0 },
-    offset: { x: 0, y: 0 },
-    origin: null,
-    install: function (host) {
-      this.host = host
-      this.target = document.getElementById('viewport')
-      document.body.appendChild(this.el)
-      document.addEventListener('mousedown', (e) => { this.touch({ x: e.clientX, y: e.clientY }, true); e.preventDefault() })
-      document.addEventListener('mousemove', (e) => { this.touch({ x: e.clientX, y: e.clientY }, false); e.preventDefault() })
-      document.addEventListener('mouseup', (e) => { this.touch({ x: e.clientX, y: e.clientY }); e.preventDefault() })
-    },
-    update: function () {
-      this.target.style.transform = `translate(${parseInt(this.offset.x)}px,${parseInt(this.offset.y)}px)`
-      document.body.style.backgroundPosition = `${parseInt(this.offset.x * 0.75)}px ${parseInt(this.offset.y * 0.75)}px`
-    },
-    touch: function (pos, click = null) {
-      if (click === true) {
-        this.origin = pos
-        return
+  function onMouseDown (e) {
+    e.preventDefault()
+
+    if (e.altKey || e.button === 1) {
+      mode = 'panning'
+      panInfo = { mx: e.clientX, my: e.clientY, ox: viewOffset.x, oy: viewOffset.y }
+      return
+    }
+
+    if (e.button !== 0) return
+
+    const vp = screenToViewport(e.clientX, e.clientY)
+    const hit = nodeAtPoint(vp.x, vp.y)
+
+    if (hit) {
+      if (e.shiftKey) {
+        if (selected.has(hit.id)) { selected.delete(hit.id) } else { selected.add(hit.id) }
+      } else if (!selected.has(hit.id)) {
+        selected.clear()
+        selected.add(hit.id)
       }
-      if (this.origin) {
-        this.offset.x += parseInt(pos.x - this.origin.x)
-        this.offset.y += parseInt(pos.y - this.origin.y)
-        this.update()
-        this.origin = pos
+
+      const starts = new Map()
+      for (const id of selected) {
+        const n = network[id]
+        if (n) starts.set(id, { x: n.rect.x, y: n.rect.y })
       }
-      if (click === null) {
-        this.origin = null
-        return
-      }
-      this.pos = pos
-    },
-    magnet: function (val) {
-      return (parseInt(val / GRID_SIZE) * GRID_SIZE) + (GRID_SIZE / 2)
+
+      mode = 'dragging'
+      dragInfo = { mx: vp.x, my: vp.y, starts, moved: false }
+      render()
+    } else {
+      if (!e.shiftKey) selected.clear()
+      mode = 'selecting'
+      selectInfo = { sx: vp.x, sy: vp.y, cx: vp.x, cy: vp.y }
+      render()
     }
   }
 
-  this.cursor.install(this)
+  function onMouseMove (e) {
+    e.preventDefault()
+
+    if (mode === 'panning' && panInfo) {
+      viewOffset.x = panInfo.ox + (e.clientX - panInfo.mx)
+      viewOffset.y = panInfo.oy + (e.clientY - panInfo.my)
+      updatePan()
+      return
+    }
+
+    if (mode === 'dragging' && dragInfo) {
+      const vp = screenToViewport(e.clientX, e.clientY)
+      const dx = (vp.x - dragInfo.mx) / GRID_SIZE
+      const dy = (vp.y - dragInfo.my) / GRID_SIZE
+      dragInfo.moved = true
+
+      for (const [id, sp] of dragInfo.starts) {
+        const n = network[id]
+        if (!n) continue
+        n.rect.x = softSnap(sp.x + dx, 0.2)
+        n.rect.y = softSnap(sp.y + dy, 0.2)
+      }
+      queueRender()
+      return
+    }
+
+    if (mode === 'selecting' && selectInfo) {
+      const vp = screenToViewport(e.clientX, e.clientY)
+      selectInfo.cx = vp.x
+      selectInfo.cy = vp.y
+      queueRender()
+    }
+  }
+
+  function onMouseUp (e) {
+    if (mode === 'dragging' && dragInfo) {
+      if (dragInfo.moved) {
+        for (const id of selected) {
+          const n = network[id]
+          if (!n) continue
+          n.rect.x = Math.round(n.rect.x)
+          n.rect.y = Math.round(n.rect.y)
+        }
+      }
+    }
+
+    if (mode === 'selecting' && selectInfo) {
+      const hits = nodesInRect(selectInfo.sx, selectInfo.sy, selectInfo.cx, selectInfo.cy)
+      for (const n of hits) { selected.add(n.id) }
+    }
+
+    mode = 'idle'
+    dragInfo = null
+    selectInfo = null
+    panInfo = null
+    render()
+  }
+
+  function onKeyDown (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'g') {
+      e.preventDefault()
+      if (selected.size >= 2) {
+        const hue = GROUP_HUES[groupCounter % GROUP_HUES.length]
+        groupCounter++
+        userGroups.push({ id: 'g' + groupCounter, nodeIds: [...selected], hue })
+        render()
+      }
+      return
+    }
+
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'g') {
+      e.preventDefault()
+      for (let i = userGroups.length - 1; i >= 0; i--) {
+        const g = userGroups[i]
+        if (g.nodeIds.some(nid => selected.has(nid))) {
+          userGroups.splice(i, 1)
+          break
+        }
+      }
+      render()
+      return
+    }
+
+    if (e.key === 'Escape') {
+      selected.clear()
+      render()
+    }
+  }
+
+  // ── Install & Initial Render ──
+
+  document.addEventListener('mousedown', onMouseDown)
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('keydown', onKeyDown)
+
+  render()
 }

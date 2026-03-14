@@ -2,7 +2,8 @@
   "standard": {
     "globals": [
       "RIVEN",
-      "Ø"
+      "Ø",
+      "requestAnimationFrame"
     ]
   },
   "name": "workspace",
