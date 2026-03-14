@@ -40,6 +40,20 @@ svg#riven g#nodes g.node g.port.answer path { fill:var(--f_high); }
 svg#riven g#nodes g.node path.glyph { stroke:var(--f_med); fill:none; stroke-width:10; stroke-linejoin: round; stroke-linecap: round  }
 svg#riven g#nodes g.node text { fill:var(--f_high); }
 
+/* Selected Node */
+svg#riven g#nodes g.node.selected rect.fill { stroke: #72dec2; stroke-width: 1.5; }
+svg#riven g#nodes g.node.selected text { fill: #72dec2; }
+svg#riven g#nodes g.node.selected .glyph { stroke: #72dec2; }
+svg#riven g#nodes g.node.selected g.port path { stroke: #72dec2; }
+svg#riven g#nodes g.node.selected g.port.in path { fill: #72dec2; }
+svg#riven g#nodes g.node.selected g.port.answer path { fill: #72dec2; }
+
+/* Selection Rectangle */
+svg#riven .selection-rect { fill: rgba(114,222,194,0.06); stroke: rgba(114,222,194,0.35); stroke-width: 1; stroke-dasharray: 4 3; }
+
+/* User Groups */
+svg#riven .group-bg { pointer-events: none; }
+
 /* Route */
 svg#riven g#routes { fill:transparent; }
 svg#riven g#routes path.route { stroke-width:2; stroke:var(--f_low) }
